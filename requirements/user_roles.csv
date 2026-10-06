@@ -1,0 +1,11 @@
+role,permission,description
+employee,customer.read,View customer profiles
+employee,customer.create,Create customer profiles
+employee,customer.update,Update customer profiles
+finance,invoice.read,View invoices
+finance,invoice.approve,Approve invoices up to 1000 EUR
+finance_manager,invoice.approve,Approve invoices up to 10000 EUR
+finance_manager,invoice.reopen,Reopen approved invoices
+department_director,invoice.approve,Approve invoices above 10000 EUR
+administrator,user.manage,Create and deactivate users
+administrator,role.manage,Assign roles to users

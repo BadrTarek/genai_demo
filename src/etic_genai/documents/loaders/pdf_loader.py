@@ -4,6 +4,7 @@ from pypdf import PdfReader
 
 from etic_genai.documents.loaders.base import DocumentLoader
 from etic_genai.documents.models.document import Document
+from etic_genai.documents.processing.metadata import calculate_content_hash, get_modified_at
 
 
 class PdfDocumentLoader(DocumentLoader):
@@ -19,11 +20,21 @@ class PdfDocumentLoader(DocumentLoader):
         reader = PdfReader(resolved_path)
         content = "\n".join(page.extract_text() or "" for page in reader.pages)
         relative_path = resolved_path.relative_to(resolved_root)
+        
+        pdf_title = reader.metadata.title if reader.metadata and reader.metadata.title else None
+        title = pdf_title if pdf_title else resolved_path.stem.replace("_", " ").replace
 
         return Document(
             document_id=relative_path.as_posix(),
             path=resolved_path,
-            title=resolved_path.stem.replace("_", " ").replace("-", " ").title(),
+            title=title,
             content=content,
+            content_hash=calculate_content_hash(content),
+            modified_at=get_modified_at(resolved_path),
             file_type="pdf",
+            metadata={
+                "source": relative_path.as_posix(),
+                "file_name": resolved_path.name
+            },
+            resolved_path=resolved_path
         )

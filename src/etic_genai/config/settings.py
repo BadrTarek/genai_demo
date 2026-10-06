@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     # Embeddings
     embedding_provider: str | None = "sentence-transformers"
     embedding_model: str | None = "all-MiniLM-L6-v2"
-    
+    embedding_deployment_name: str | None = None
     # chunking
     chunk_size: int = 1000
     chunk_overlap: int = 200

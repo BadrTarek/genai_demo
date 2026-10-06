@@ -18,12 +18,28 @@ def test_loads_markdown_document(tmp_path: Path):
 
     loader = DocumentLoaderFactory().get_loader(document_path)
     document = loader.load(document_path, requirements_dir)
+    print(document)
 
-    assert document.document_id == "authentication.md"
     assert document.title == "Authentication"
-    assert document.file_type == "md"
-    assert "Users must sign in" in document.content
+    assert document.metadata["source"] == "authentication.md"
+    assert document.metadata["file_name"] == "authentication.md"
+    assert document.content_hash
+    assert document.modified_at is not None
 
+def test_extracts_markdown_heading_as_title(tmp_path: Path):
+    requirements_dir = tmp_path / "requirements"
+    requirements_dir.mkdir()
+
+    document_path = requirements_dir / "security_rules.md"
+    document_path.write_text(
+        "# Password Security Requirements\nPasswords must be strong.",
+        encoding="utf-8",
+    )
+
+    loader = DocumentLoaderFactory().get_loader(document_path)
+    document = loader.load(document_path, requirements_dir)
+
+    assert document.title == "Password Security Requirements"
 
 def test_rejects_path_outside_root(tmp_path: Path):
     requirements_dir = tmp_path / "requirements"

@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 
@@ -9,3 +10,6 @@ class Document:
     title: str
     content: str
     file_type: str
+    metadata: dict[str, str] = field(default_factory=dict)
+    content_hash: str | None = ""
+    modified_at: datetime | None = None

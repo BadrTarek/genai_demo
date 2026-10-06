@@ -1,0 +1,21 @@
+Invoice Approval Requirements
+
+The system must support a two-level invoice approval workflow.
+
+Invoices below 1,000 EUR require approval from one finance employee.
+
+Invoices from 1,000 EUR up to 10,000 EUR require approval from a finance manager.
+
+Invoices above 10,000 EUR require approval from both a finance manager and a department director.
+
+The invoice creator cannot approve their own invoice.
+
+An approver must be notified by email when an invoice is waiting for approval.
+
+Approvers must be able to approve or reject an invoice.
+
+A rejected invoice must include a rejection reason.
+
+The system must record the approval decision, approver, timestamp, and comments.
+
+Approved invoices cannot be edited unless they are reopened by a finance manager.

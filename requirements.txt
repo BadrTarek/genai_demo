@@ -12,6 +12,9 @@ langchain-openai>=1.0
 # MCP server
 mcp>=1.0
 
+# chunking and text splitting
+langchain-text-splitters>=1.0
+
 # Embeddings
 sentence-transformers>=3.0
 
@@ -28,3 +31,4 @@ pytest>=8.0
 pytest-asyncio>=0.23
 ruff>=0.6
 mypy>=1.10
+
