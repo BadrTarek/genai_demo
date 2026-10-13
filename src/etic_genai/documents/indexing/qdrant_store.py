@@ -12,21 +12,25 @@ from etic_genai.documents.models.DocumentChunk import DocumentChunk
 
 
 class QdrantStore:
-    vector_size = 1536
-
     def __init__(
         self,
         path: str = "./data/qdrant",
         collection_name: str = "business_requirements",
+        vector_size: int | None = 1536,
+        url: str | None = None,
     ) -> None:
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-
-        self.client = QdrantClient(path=path)
+        if url:
+            self.client = QdrantClient(url=url)
+        else:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            self.client = QdrantClient(path=path)
         self.collection_name = collection_name
+        self.vector_size = vector_size
 
-        self._ensure_collection()
+        if vector_size is not None:
+            self._ensure_collection(vector_size)
 
-    def _ensure_collection(self) -> None:
+    def _ensure_collection(self, vector_size: int) -> None:
         collections = self.client.get_collections().collections
         collection_names = {collection.name for collection in collections}
 
@@ -34,7 +38,7 @@ class QdrantStore:
             self.client.create_collection(
                 collection_name=self.collection_name,
                 vectors_config=VectorParams(
-                    size=self.vector_size,
+                    size=vector_size,
                     distance=Distance.COSINE,
                 ),
             )
@@ -46,6 +50,9 @@ class QdrantStore:
     ) -> None:
         if len(chunks) != len(vectors):
             raise ValueError("Each chunk must have exactly one vector")
+
+        if vectors:
+            self._ensure_collection(len(vectors[0]))
 
         points = [
             PointStruct(
@@ -61,7 +68,7 @@ class QdrantStore:
                     "content": chunk.content,
                 },
             )
-            for chunk, vector in zip(chunks, vectors)
+            for chunk, vector in zip(chunks, vectors, strict=True)
         ]
 
         if points:
