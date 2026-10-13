@@ -1,82 +1,64 @@
+"""Index, search, or serve the knowledge base.
+
+Examples:
+    python run_script.py index --path requirements
+    python run_script.py search --query "What are the user roles?"
+    python run_script.py mcp
+"""
+
+import argparse
 import json
-from pathlib import Path
 import os
 
 from dotenv import load_dotenv
 
+from etic_genai.documents.indexing.knowledge_base import KnowledgeBase
+
 load_dotenv()
-def run_chunking() -> dict[str, list[dict]]:
-    from etic_genai.documents.loaders.factory import DocumentLoaderFactory
-    from etic_genai.documents.processing.chunker import DocumentChunker
-    from etic_genai.embeddings.model import EmbeddingModel
-    from etic_genai.documents.indexing.qdrant_store import QdrantStore
 
-    root = Path("requirements").resolve()
-    output_path = Path("output/chunks.json")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    factory = DocumentLoaderFactory()
-    chunker = DocumentChunker()
-    output: dict[str, list[dict]] = {}
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Knowledge-base indexing and MCP server")
+    subparsers = parser.add_subparsers(dest="command", required=True)
 
-    for file_path in root.rglob("*"):
-        if not file_path.is_file():
-            continue
-
-        try:
-            loader = factory.get_loader(path=file_path)
-        except ValueError:
-            print(f"Skipping unsupported file: {file_path}")
-            continue
-
-        document = loader.load(path=file_path, root=root)
-        chunks = chunker.split(document)
-        
-        # embed the chunks and store them in the output dictionary
-        embedding_model = EmbeddingModel(
-            model=os.getenv("EMBEDDING_DEPLOYMENT_NAME", "text-embedding-3-small"),
-            api_key=os.environ["OPENAI_API_KEY"],
-            base_url=os.environ["OPENAI_BASE_URL"],
-        )
-        qdrant_store = QdrantStore(
-            path="./data/qdrant",
-            collection_name="business_requirements",
-        )
-        vectors = embedding_model.embed_documents(
-            [chunk.content for chunk in chunks]
-        )
-        qdrant_store.upsert(chunks, vectors)
-        
-        # searching
-        query_query = embedding_model.embed_query("What are the requirements for the new feature?")
-        search_results = qdrant_store.search(query_query, limit=5)
-        for result in search_results:
-            print(result.score)
-            print(result.payload["document_title"])
-            print(result.payload["section"])
-            print(result.payload["content"])
-
-        output[document.document_id] = [
-            {
-                "chunk_id": f"{document.document_id}:{chunk.chunk_index}",
-                "document_id": document.document_id,
-                "document_title": document.title,
-                "source": chunk.source,
-                "section": chunk.section,
-                "chunk_index": chunk.chunk_index,
-                "content": chunk.content,
-            }
-            for chunk in chunks
-        ]
-
-    output_path.write_text(
-        json.dumps(output, indent=2, ensure_ascii=False),
-        encoding="utf-8",
+    index_parser = subparsers.add_parser("index", help="Chunk, embed, and index a directory")
+    index_parser.add_argument(
+        "--path", required=True, help="Directory containing source documents"
+    )
+    index_parser.add_argument(
+        "--output", default="output/chunks.json", help="Chunk metadata output"
     )
 
-    print(f"Wrote {sum(len(chunks) for chunks in output.values())} chunks to {output_path}")
-    return output
+    search_parser = subparsers.add_parser("search", help="Search indexed document chunks")
+    search_parser.add_argument("--query", required=True, help="Natural-language search query")
+    search_parser.add_argument("--top-k", type=int, default=5)
+
+    subparsers.add_parser("mcp", help="Start the MCP server over stdio")
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    if args.command == "mcp":
+        from etic_genai.mcp_server import main as run_mcp_server
+
+        run_mcp_server()
+        return
+
+    knowledge_base = KnowledgeBase(
+        qdrant_path=os.getenv("QDRANT_PATH", "./data/qdrant"),
+        qdrant_url=os.getenv("QDRANT_URL") or None,
+        collection_name=os.getenv("QDRANT_COLLECTION_NAME", "business_requirements"),
+        embedding_model=os.getenv("EMBEDDING_DEPLOYMENT_NAME", "text-embedding-3-small"),
+        chunk_size=int(os.getenv("CHUNK_SIZE", "1000")),
+        chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "200")),
+    )
+    if args.command == "index":
+        result = knowledge_base.index_path(args.path, args.output)
+    else:
+        result = knowledge_base.search(args.query, args.top_k)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":
-    run_chunking()
+    main()

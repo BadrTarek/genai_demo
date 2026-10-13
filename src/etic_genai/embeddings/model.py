@@ -1,3 +1,4 @@
+import os
 from collections.abc import Sequence
 
 from langchain_openai import OpenAIEmbeddings
@@ -12,8 +13,8 @@ class EmbeddingModel:
     ) -> None:
         self.model = OpenAIEmbeddings(
             model=model,
-            api_key=api_key,
-            base_url=base_url,
+            api_key=api_key or os.getenv("OPENAI_API_KEY"),
+            base_url=base_url or os.getenv("OPENAI_BASE_URL"),
         )
 
     def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:

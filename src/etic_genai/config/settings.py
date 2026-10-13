@@ -1,9 +1,9 @@
 """Application settings, loaded from environment variables and `.env`."""
 
-from dataclasses import Field
 from functools import lru_cache
 
 from dotenv import load_dotenv
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,8 +25,8 @@ class Settings(BaseSettings):
     qdrant_path: str | None = "./data/qdrant"
     qdrant_collection_name: str | None = "business_requirements"
     # Embeddings
-    embedding_provider: str | None = "sentence-transformers"
-    embedding_model: str | None = "all-MiniLM-L6-v2"
+    embedding_provider: str | None = "openai"
+    embedding_model: str | None = "text-embedding-3-small"
     embedding_deployment_name: str | None = None
     # chunking
     chunk_size: int = 1000
@@ -36,7 +36,9 @@ class Settings(BaseSettings):
     indexing_on_startup: bool = True
     max_search_results: int = 5
     
-    allowed_file_types: list[str] = Field(default_factory=lambda: ["pdf", "docx", "txt", "md", "csv", "json"])
+    allowed_file_types: list[str] = Field(
+        default_factory=lambda: ["pdf", "docx", "txt", "md", "csv", "json"]
+    )
 
 
 @lru_cache
