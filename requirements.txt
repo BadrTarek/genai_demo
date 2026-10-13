@@ -9,8 +9,8 @@ python-dotenv>=1.0
 # OpenAI GPT-5.1
 langchain-openai>=1.0
 
-# MCP server
-mcp>=1.0
+# MCP server (the implementation uses the v1 FastMCP API)
+mcp>=1.0,<2.0
 
 # chunking and text splitting
 langchain-text-splitters>=1.0
