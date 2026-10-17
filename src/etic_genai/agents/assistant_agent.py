@@ -15,7 +15,9 @@ class AssistantAgent(BaseAgent):
     description = "General-purpose assistant that can call tools."
 
     def default_tools(self) -> list[BaseTool]:
-        return tool_registry.get_many(["current_datetime"])
+        return tool_registry.get_many(
+            ["current_datetime", "request_document_access", "sharepoint_list_files","sharepoint_search"]
+        )
 
     def build_graph(self) -> StateGraph:
         prompt = AssistantPrompt().to_chat_prompt(agent_name=self.name)

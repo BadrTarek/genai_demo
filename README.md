@@ -12,6 +12,20 @@ pytest                              # tests use a fake LLM, no API key needed
 python scripts/run_agent.py         # chat with the example agent
 ```
 
+### MCP server
+
+Install the MCP extra when you want to expose project tools and agents to an MCP host:
+
+```bash
+pip install -e ".[mcp,openai]"
+python scripts/run_mcp_server.py
+```
+
+The server currently exposes:
+
+- `current_datetime`: wraps the shared `tools` registry entry.
+- `chat_with_assistant`: sends a message to `AssistantAgent`.
+
 ## Project layout
 
 ```

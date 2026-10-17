@@ -1,7 +1,8 @@
 import pytest
 
 from etic_genai.core.exceptions import ToolNotFoundError
-from etic_genai.tools import CurrentDateTimeTool, ToolRegistry
+from etic_genai.tools import CurrentDateTimeTool, DocumentAccessRequestTool, SharePointListFilesTool
+from etic_genai.tools.registry import ToolRegistry
 
 
 def test_datetime_tool_returns_iso_string():
@@ -22,3 +23,18 @@ def test_registry():
         registry.register(CurrentDateTimeTool())
     with pytest.raises(ToolNotFoundError):
         registry.get("missing")
+
+
+def test_document_access_request_requires_user_approval():
+    result = DocumentAccessRequestTool().invoke(
+        {"provider": "sharepoint", "purpose": "List files for the current task."}
+    )
+    assert "approval_required" in result
+    assert "sharepoint" in result
+
+
+def test_sharepoint_tool_does_not_access_files_when_denied():
+    result = SharePointListFilesTool().invoke(
+        {"approved": False, "site_id": "contoso.sharepoint.com,site-id"}
+    )
+    assert "Access denied by user" in result
