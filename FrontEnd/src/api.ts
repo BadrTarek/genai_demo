@@ -8,6 +8,7 @@ const USER_KEY = "etic_user";
 export interface User {
   user_id: string;
   email: string;
+  is_admin: boolean;
 }
 
 export interface SignInResponse {
@@ -34,6 +35,13 @@ export interface UploadResponse {
   document_id: string;
   document_title: string;
   chunk_count: number;
+}
+
+export interface EvaluationResponse {
+  status: "completed";
+  experiment_name: string;
+  experiment_id: string;
+  experiment_url: string | null;
 }
 
 interface ApiErrorBody {
@@ -65,7 +73,12 @@ export function getSavedSession(): SignInResponse | null {
     if (typeof user.user_id !== "string" || typeof user.email !== "string") {
       throw new Error("Saved user data is invalid.");
     }
-    return { access_token: accessToken, token_type: "bearer", expires_in: 0, user };
+    return {
+      access_token: accessToken,
+      token_type: "bearer",
+      expires_in: 0,
+      user: { ...user, is_admin: user.is_admin === true },
+    };
   } catch {
     clearSavedSession();
     return null;
@@ -171,4 +184,8 @@ export async function uploadDocument(
   }
 
   return readResponse<UploadResponse>(response);
+}
+
+export function runEvaluation(): Promise<EvaluationResponse> {
+  return post<EvaluationResponse>("/admin/evaluations/run", {}, true);
 }

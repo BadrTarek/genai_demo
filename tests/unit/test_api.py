@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 import etic_genai.api.dependencies as api_dependencies
+import etic_genai.api.routes.evaluations as evaluations_route
 from etic_genai.api.dependencies import (
     get_agent,
     get_auth_store,
@@ -257,6 +258,49 @@ def test_swagger_ui_and_openapi_documentation_are_available():
     assert schema["paths"]["/documents/upload"]["post"]["tags"] == ["Documents"]
     assert schema["paths"]["/chat"]["post"]["tags"] == ["Chat"]
     assert schema["paths"]["/admin/usage"]["get"]["tags"] == ["Usage"]
+    assert schema["paths"]["/admin/evaluations/run"]["post"]["tags"] == ["Evaluations"]
+
+
+def test_admin_evaluation_endpoint_requires_admin_access():
+    app.dependency_overrides[get_current_user] = lambda: AuthUser(
+        user_id="regular-user",
+        email="regular@example.com",
+    )
+
+    response = TestClient(app).post("/admin/evaluations/run")
+
+    assert response.status_code == 403
+
+
+def test_admin_evaluation_endpoint_returns_experiment_details(monkeypatch):
+    app.dependency_overrides[get_current_user] = lambda: AuthUser(
+        user_id="admin-user",
+        email="admin@example.com",
+        is_admin=True,
+    )
+    requested_user_ids: list[str] = []
+
+    def fake_run_evaluation(user_id: str) -> dict[str, str | None]:
+        requested_user_ids.append(user_id)
+        return {
+            "status": "completed",
+            "experiment_name": "brd-rag-test",
+            "experiment_id": "experiment-id",
+            "experiment_url": "https://smith.langchain.com/experiment",
+        }
+
+    monkeypatch.setattr(evaluations_route, "run_dataset_evaluation", fake_run_evaluation)
+
+    response = TestClient(app).post("/admin/evaluations/run")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "completed",
+        "experiment_name": "brd-rag-test",
+        "experiment_id": "experiment-id",
+        "experiment_url": "https://smith.langchain.com/experiment",
+    }
+    assert requested_user_ids == ["admin-user"]
 
 
 def test_admin_usage_endpoint_requires_admin_access():

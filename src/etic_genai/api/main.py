@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from etic_genai.api.routes.auth import router as auth_router
 from etic_genai.api.routes.chat import router as chat_router
 from etic_genai.api.routes.documents import router as documents_router
+from etic_genai.api.routes.evaluations import router as evaluations_router
 from etic_genai.api.routes.usage import router as usage_router
 
 API_TAGS = [
@@ -25,6 +26,10 @@ API_TAGS = [
         "name": "Usage",
         "description": "Administrator-only cumulative LLM token usage reports.",
     },
+    {
+        "name": "Evaluations",
+        "description": "Administrator-only LangSmith retrieval and answer evaluations.",
+    },
 ]
 
 app = FastAPI(
@@ -43,6 +48,8 @@ app.add_middleware(
     allow_origins=[
         "127.0.0.1:52766",
         "http://localhost:5173",
+        "127.0.0.1:53593",
+        "127.0.0.1:56179",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:5173",
     ],
@@ -54,3 +61,4 @@ app.include_router(auth_router)
 app.include_router(documents_router)
 app.include_router(chat_router)
 app.include_router(usage_router)
+app.include_router(evaluations_router)

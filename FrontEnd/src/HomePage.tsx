@@ -2,9 +2,11 @@ import { useRef, useState, type FormEvent } from "react";
 import { Link, NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import {
   ApiError,
+  runEvaluation,
   sendChatMessage,
   uploadDocument,
   type ChatResponse,
+  type EvaluationResponse,
   type SignInResponse,
   type UploadResponse,
 } from "./api";
@@ -19,7 +21,11 @@ interface HomePageProps {
 
 export default function HomePage({ user, onSignOut }: HomePageProps) {
   const location = useLocation();
-  const currentPage = location.pathname.includes("/documents") ? "documents" : "chat";
+  const currentPage = location.pathname.includes("/documents")
+    ? "documents"
+    : location.pathname.includes("/evaluations")
+      ? "evaluations"
+      : "chat";
 
   return (
     <main className="workspace-shell">
@@ -29,7 +35,7 @@ export default function HomePage({ user, onSignOut }: HomePageProps) {
           <span>etic<span>/genai</span></span>
         </Link>
         <div className="workspace-nav-label">WORKSPACE</div>
-        <nav className="workspace-nav" aria-label="Workspace">
+        <nav className={`workspace-nav${user.is_admin ? " admin-nav" : ""}`} aria-label="Workspace">
           <NavLink
             className={({ isActive }) => `workspace-nav-item${isActive ? " selected" : ""}`}
             to="/home/chat"
@@ -44,6 +50,15 @@ export default function HomePage({ user, onSignOut }: HomePageProps) {
             <span className="nav-icon document-icon" aria-hidden="true">▤</span>
             Document upload
           </NavLink>
+          {user.is_admin && (
+            <NavLink
+              className={({ isActive }) => `workspace-nav-item${isActive ? " selected" : ""}`}
+              to="/home/evaluations"
+            >
+              <span className="nav-icon" aria-hidden="true">◷</span>
+              Evaluations
+            </NavLink>
+          )}
         </nav>
         <div className="sidebar-bottom">
           <div className="sidebar-tip">
@@ -75,7 +90,13 @@ export default function HomePage({ user, onSignOut }: HomePageProps) {
         <header className="workspace-topbar">
           <div>
             <span className="workspace-breadcrumb">WORKSPACE <span>/</span></span>
-            <h1>{currentPage === "documents" ? "Document upload" : "Chat"}</h1>
+            <h1>
+              {currentPage === "documents"
+                ? "Document upload"
+                : currentPage === "evaluations"
+                  ? "Evaluations"
+                  : "Chat"}
+            </h1>
           </div>
           <div className="topbar-status">
             <span className="status-dot" />
@@ -88,6 +109,16 @@ export default function HomePage({ user, onSignOut }: HomePageProps) {
             <Route
               path="documents"
               element={<UploadPanel />}
+            />
+            <Route
+              path="evaluations"
+              element={
+                user.is_admin ? (
+                  <EvaluationPanel />
+                ) : (
+                  <Navigate to="/home/chat" replace />
+                )
+              }
             />
             <Route path="*" element={<Navigate to="/home/chat" replace />} />
           </Routes>
@@ -395,6 +426,98 @@ function UploadPanel() {
         <div>
           <strong>What happens to my file?</strong>
           <p>Your document is split into searchable sections and indexed securely for your account.</p>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function EvaluationPanel() {
+  const [result, setResult] = useState<EvaluationResponse | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function handleRunEvaluation() {
+    setLoading(true);
+    setError("");
+    setResult(null);
+    try {
+      setResult(await runEvaluation());
+    } catch (cause) {
+      setError(
+        cause instanceof ApiError
+          ? cause.message
+          : "Something went wrong. Please try again.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="evaluation-layout">
+      <section className="evaluation-card">
+        <div className="evaluation-heading">
+          <span className="upload-icon" aria-hidden="true">◷</span>
+          <div>
+            <h2>Run retrieval evaluation</h2>
+            <p>
+              Evaluate retrieval relevance and answer correctness with the
+              configured LangSmith dataset.
+            </p>
+          </div>
+        </div>
+        <div className="evaluation-callout">
+          <strong>Administrator evaluation</strong>
+          <p>
+            This may take a few minutes and uses your account’s documents. The
+            results are saved to LangSmith.
+          </p>
+        </div>
+        {error && <div className="notice error-notice workspace-notice" role="alert">{error}</div>}
+        <button
+          className="upload-submit run-evaluation-button"
+          disabled={loading}
+          onClick={handleRunEvaluation}
+          type="button"
+        >
+          {loading ? (
+            <>
+              <span className="evaluation-spinner" aria-hidden="true" />
+              Evaluation running…
+            </>
+          ) : (
+            "Run evaluation"
+          )}
+          {!loading && <span aria-hidden="true">→</span>}
+        </button>
+        {result && (
+          <section className="evaluation-result" aria-live="polite">
+            <div className="evaluation-result-heading">
+              <div>
+                <span className="evaluation-complete"><span className="status-dot" /> Evaluation complete</span>
+                <h3>{result.experiment_name}</h3>
+              </div>
+              {result.experiment_url && (
+                <a
+                  className="experiment-link"
+                  href={result.experiment_url}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  Open in LangSmith <span aria-hidden="true">↗</span>
+                </a>
+              )}
+            </div>
+            <pre className="evaluation-json">{JSON.stringify(result, null, 2)}</pre>
+          </section>
+        )}
+      </section>
+      <aside className="upload-side-note">
+        <span className="side-note-icon" aria-hidden="true">✳</span>
+        <div>
+          <strong>What is being evaluated?</strong>
+          <p>Each dataset example is scored for retrieval relevance and answer correctness.</p>
         </div>
       </aside>
     </div>

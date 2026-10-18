@@ -44,7 +44,7 @@ def register(
             status_code=status.HTTP_409_CONFLICT,
             detail="An account with this email already exists.",
         ) from exc
-    return UserResponse(user_id=user.user_id, email=user.email)
+    return UserResponse(user_id=user.user_id, email=user.email, is_admin=user.is_admin)
 
 
 @router.post(
@@ -78,5 +78,9 @@ def sign_in(
     return SignInResponse(
         access_token=session.access_token,
         expires_in=session.expires_in,
-        user=UserResponse(user_id=session.user.user_id, email=session.user.email),
+        user=UserResponse(
+            user_id=session.user.user_id,
+            email=session.user.email,
+            is_admin=session.user.is_admin,
+        ),
     )

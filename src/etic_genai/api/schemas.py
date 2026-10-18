@@ -1,6 +1,7 @@
 """Request and response models for the HTTP API."""
 
 import re
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -90,6 +91,7 @@ class SignInRequest(BaseModel):
 class UserResponse(BaseModel):
     user_id: str
     email: str
+    is_admin: bool = False
 
 
 class SignInResponse(BaseModel):
@@ -109,3 +111,10 @@ class ConversationUsageResponse(BaseModel):
     model_calls: int
     unreported_calls: int
     updated_at: int
+
+
+class EvaluationResponse(BaseModel):
+    status: Literal["completed"]
+    experiment_name: str
+    experiment_id: str
+    experiment_url: str | None

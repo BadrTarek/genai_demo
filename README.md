@@ -66,6 +66,14 @@ Restart the API; the promotion applies to the account's next authorized
 request. The `is_admin` column is added automatically to existing databases;
 existing accounts remain non-admin.
 
+The administrator-only `POST /admin/evaluations/run` endpoint runs the
+`brd-retrieval-evaluation` LangSmith dataset using the signed-in administrator's
+own documents. It returns the experiment name, ID, and LangSmith URL. Configure
+`LANGSMITH_API_KEY` and ensure the dataset already exists before running an
+evaluation. Evaluations are synchronous and may take several minutes.
+Administrators can also run an evaluation from the **Evaluations** page in the
+frontend workspace.
+
 ### Evaluate retrieval and answers
 
 Run `python tests/evaluate_agent.py` to evaluate the end-to-end chat retrieval
