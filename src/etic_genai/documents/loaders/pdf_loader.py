@@ -20,9 +20,13 @@ class PdfDocumentLoader(DocumentLoader):
         reader = PdfReader(resolved_path)
         content = "\n".join(page.extract_text() or "" for page in reader.pages)
         relative_path = resolved_path.relative_to(resolved_root)
-        
+
         pdf_title = reader.metadata.title if reader.metadata and reader.metadata.title else None
-        title = pdf_title if pdf_title else resolved_path.stem.replace("_", " ").replace
+        title = (
+            pdf_title
+            if pdf_title
+            else resolved_path.stem.replace("_", " ").replace("-", " ").title()
+        )
 
         return Document(
             document_id=relative_path.as_posix(),
@@ -32,9 +36,5 @@ class PdfDocumentLoader(DocumentLoader):
             content_hash=calculate_content_hash(content),
             modified_at=get_modified_at(resolved_path),
             file_type="pdf",
-            metadata={
-                "source": relative_path.as_posix(),
-                "file_name": resolved_path.name
-            },
-            resolved_path=resolved_path
+            metadata={"source": relative_path.as_posix(), "file_name": resolved_path.name},
         )

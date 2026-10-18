@@ -1,0 +1,91 @@
+{
+  "authentication.md": [
+    {
+      "chunk_id": "authentication.md:0",
+      "document_id": "authentication.md",
+      "document_title": "User Authentication Requirements",
+      "source": "authentication.md",
+      "section": "Overview",
+      "chunk_index": 0,
+      "content": "The system must provide secure authentication for registered users."
+    },
+    {
+      "chunk_id": "authentication.md:1",
+      "document_id": "authentication.md",
+      "document_title": "User Authentication Requirements",
+      "source": "authentication.md",
+      "section": "Functional Requirements",
+      "chunk_index": 1,
+      "content": "- Users must sign in using an email address and password.\n- Email addresses must be unique and case-insensitive.\n- Passwords must contain at least 12 characters.\n- Passwords must include uppercase, lowercase, number, and special character.\n- Users must receive an error message when authentication fails.\n- The system must lock an account after five failed attempts within 15 minutes.\n- Locked accounts must automatically unlock after 30 minutes.\n- Users must be able to reset their password using a verified email address."
+    },
+    {
+      "chunk_id": "authentication.md:2",
+      "document_id": "authentication.md",
+      "document_title": "User Authentication Requirements",
+      "source": "authentication.md",
+      "section": "Security Requirements",
+      "chunk_index": 2,
+      "content": "- Passwords must never be stored as plain text.\n- Authentication requests must use HTTPS.\n- User sessions must expire after 30 minutes of inactivity."
+    }
+  ],
+  "customer_onboarding.md": [
+    {
+      "chunk_id": "customer_onboarding.md:0",
+      "document_id": "customer_onboarding.md",
+      "document_title": "Customer Onboarding Requirements",
+      "source": "customer_onboarding.md",
+      "section": "Overview",
+      "chunk_index": 0,
+      "content": "The system must allow internal users to create and manage customer profiles."
+    },
+    {
+      "chunk_id": "customer_onboarding.md:1",
+      "document_id": "customer_onboarding.md",
+      "document_title": "Customer Onboarding Requirements",
+      "source": "customer_onboarding.md",
+      "section": "Functional Requirements",
+      "chunk_index": 1,
+      "content": "- An employee must provide the customer's legal name, email address, phone number, and country.\n- The system must validate the customer email address.\n- The system must prevent duplicate customers with the same email address.\n- New customers must initially have the status Pending.\n- A customer must be approved before they can create orders.\n- The system must record who approved the customer and when.\n- Employees must be able to search customers by name, email, or status."
+    },
+    {
+      "chunk_id": "customer_onboarding.md:2",
+      "document_id": "customer_onboarding.md",
+      "document_title": "Customer Onboarding Requirements",
+      "source": "customer_onboarding.md",
+      "section": "Audit Requirements",
+      "chunk_index": 2,
+      "content": "- Customer creation must be recorded in the audit log.\n- Customer updates must record the previous and new values.\n- Audit records must not be deleted by regular employees."
+    }
+  ],
+  "invoice_approval.txt": [
+    {
+      "chunk_id": "invoice_approval.txt:0",
+      "document_id": "invoice_approval.txt",
+      "document_title": "Invoice Approval",
+      "source": "invoice_approval.txt",
+      "section": null,
+      "chunk_index": 0,
+      "content": "Invoice Approval Requirements\n\nThe system must support a two-level invoice approval workflow.\n\nInvoices below 1,000 EUR require approval from one finance employee.\n\nInvoices from 1,000 EUR up to 10,000 EUR require approval from a finance manager.\n\nInvoices above 10,000 EUR require approval from both a finance manager and a department director.\n\nThe invoice creator cannot approve their own invoice.\n\nAn approver must be notified by email when an invoice is waiting for approval.\n\nApprovers must be able to approve or reject an invoice.\n\nA rejected invoice must include a rejection reason.\n\nThe system must record the approval decision, approver, timestamp, and comments."
+    },
+    {
+      "chunk_id": "invoice_approval.txt:1",
+      "document_id": "invoice_approval.txt",
+      "document_title": "Invoice Approval",
+      "source": "invoice_approval.txt",
+      "section": null,
+      "chunk_index": 1,
+      "content": "The system must record the approval decision, approver, timestamp, and comments.\n\nApproved invoices cannot be edited unless they are reopened by a finance manager."
+    }
+  ],
+  "user_roles.csv": [
+    {
+      "chunk_id": "user_roles.csv:0",
+      "document_id": "user_roles.csv",
+      "document_title": "User Roles",
+      "source": "user_roles.csv",
+      "section": null,
+      "chunk_index": 0,
+      "content": "role,permission,description\nemployee,customer.read,View customer profiles\nemployee,customer.create,Create customer profiles\nemployee,customer.update,Update customer profiles\nfinance,invoice.read,View invoices\nfinance,invoice.approve,Approve invoices up to 1000 EUR\nfinance_manager,invoice.approve,Approve invoices up to 10000 EUR\nfinance_manager,invoice.reopen,Reopen approved invoices\ndepartment_director,invoice.approve,Approve invoices above 10000 EUR\nadministrator,user.manage,Create and deactivate users\nadministrator,role.manage,Assign roles to users"
+    }
+  ]
+}

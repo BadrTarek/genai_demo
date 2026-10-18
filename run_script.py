@@ -1,23 +1,37 @@
 import json
 from pathlib import Path
-import os
 
-from dotenv import load_dotenv
 
-load_dotenv()
 def run_chunking() -> dict[str, list[dict]]:
+    from etic_genai.config import get_settings
+    from etic_genai.documents.indexing.qdrant_store import QdrantStore
     from etic_genai.documents.loaders.factory import DocumentLoaderFactory
     from etic_genai.documents.processing.chunker import DocumentChunker
     from etic_genai.embeddings.model import EmbeddingModel
-    from etic_genai.documents.indexing.qdrant_store import QdrantStore
 
-    root = Path("requirements").resolve()
+    settings = get_settings()
+    root = Path(settings.requirements_dir or "./requirements").resolve()
     output_path = Path("output/chunks.json")
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     factory = DocumentLoaderFactory()
     chunker = DocumentChunker()
     output: dict[str, list[dict]] = {}
+    if settings.azure_openai_endpoint:
+        embedding_model = EmbeddingModel(
+            model=settings.embedding_model,
+            api_key=settings.azure_openai_api_key,
+            azure_endpoint=settings.azure_openai_endpoint,
+            azure_deployment=settings.embedding_deployment_name,
+            api_version=settings.openai_api_version,
+        )
+    else:
+        embedding_model = EmbeddingModel(
+            model=settings.embedding_model,
+            api_key=settings.openai_api_key,
+            base_url=settings.openai_base_url,
+        )
+    qdrant_store = QdrantStore.from_settings()
 
     for file_path in root.rglob("*"):
         if not file_path.is_file():
@@ -31,22 +45,11 @@ def run_chunking() -> dict[str, list[dict]]:
 
         document = loader.load(path=file_path, root=root)
         chunks = chunker.split(document)
-        
+
         # embed the chunks and store them in the output dictionary
-        embedding_model = EmbeddingModel(
-            model=os.getenv("EMBEDDING_DEPLOYMENT_NAME", "text-embedding-3-small"),
-            api_key=os.environ["OPENAI_API_KEY"],
-            base_url=os.environ["OPENAI_BASE_URL"],
-        )
-        qdrant_store = QdrantStore(
-            path="./data/qdrant",
-            collection_name="business_requirements",
-        )
-        vectors = embedding_model.embed_documents(
-            [chunk.content for chunk in chunks]
-        )
+        vectors = embedding_model.embed_documents([chunk.content for chunk in chunks])
         qdrant_store.upsert(chunks, vectors)
-        
+
         # searching
         query_query = embedding_model.embed_query("What are the requirements for the new feature?")
         search_results = qdrant_store.search(query_query, limit=5)

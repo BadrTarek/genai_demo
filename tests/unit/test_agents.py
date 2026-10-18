@@ -1,7 +1,7 @@
 from langchain_core.messages import AIMessage
 
 from etic_genai.agents import AssistantAgent
-from etic_genai.memory import get_checkpointer
+from etic_genai.memory import get_checkpointer, get_sqlite_checkpointer
 
 
 def test_agent_answers_without_tools(fake_llm_factory):
@@ -30,3 +30,29 @@ def test_agent_remembers_thread(fake_llm_factory):
     agent.invoke("first", thread_id="t1")
     result = agent.invoke("second", thread_id="t1")
     assert len(result["messages"]) == 4
+
+
+def test_agent_history_survives_reopening_sqlite_checkpointer(fake_llm_factory, tmp_path):
+    database_path = str(tmp_path / "chat.db")
+    first_saver = get_sqlite_checkpointer(database_path)
+    first_agent = AssistantAgent(
+        llm=fake_llm_factory("first reply"),
+        tools=[],
+        checkpointer=first_saver,
+    )
+    first_agent.invoke("first message", thread_id="user-1:conversation-1")
+
+    first_saver.conn.close()
+    get_sqlite_checkpointer.cache_clear()
+    second_saver = get_sqlite_checkpointer(database_path)
+    second_agent = AssistantAgent(
+        llm=fake_llm_factory("second reply"),
+        tools=[],
+        checkpointer=second_saver,
+    )
+    result = second_agent.invoke("second message", thread_id="user-1:conversation-1")
+
+    assert len(result["messages"]) == 4
+    assert result["messages"][0].content == "first message"
+    second_saver.conn.close()
+    get_sqlite_checkpointer.cache_clear()
