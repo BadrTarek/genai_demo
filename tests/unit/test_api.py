@@ -218,8 +218,10 @@ def test_register_and_sign_in_with_sqlite(tmp_path: Path):
 
     assert registration.status_code == 201
     assert registration.json()["email"] == "person@example.com"
+    assert registration.json()["is_admin"] is False
     assert duplicate.status_code == 409
     assert sign_in.status_code == 200
+    assert sign_in.json()["user"]["is_admin"] is False
     token = sign_in.json()["access_token"]
     assert auth_store.get_active_session_user(token).email == "person@example.com"
 
