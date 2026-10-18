@@ -53,17 +53,13 @@ class BaseAgent(ABC):
     @property
     def graph(self) -> CompiledStateGraph:
         if self._graph is None:
-            self._graph = self.build_graph().compile(
-                checkpointer=self.checkpointer, name=self.name
-            )
+            self._graph = self.build_graph().compile(checkpointer=self.checkpointer, name=self.name)
         return self._graph
 
     def invoke(self, input: AgentInput, thread_id: str | None = None, **kwargs: Any) -> dict:
         return self.graph.invoke(self._to_state(input), self._config(thread_id), **kwargs)
 
-    async def ainvoke(
-        self, input: AgentInput, thread_id: str | None = None, **kwargs: Any
-    ) -> dict:
+    async def ainvoke(self, input: AgentInput, thread_id: str | None = None, **kwargs: Any) -> dict:
         return await self.graph.ainvoke(self._to_state(input), self._config(thread_id), **kwargs)
 
     def stream(self, input: AgentInput, thread_id: str | None = None, **kwargs: Any) -> Iterator:

@@ -26,6 +26,7 @@ def test_loads_markdown_document(tmp_path: Path):
     assert document.content_hash
     assert document.modified_at is not None
 
+
 def test_extracts_markdown_heading_as_title(tmp_path: Path):
     requirements_dir = tmp_path / "requirements"
     requirements_dir.mkdir()
@@ -40,6 +41,7 @@ def test_extracts_markdown_heading_as_title(tmp_path: Path):
     document = loader.load(document_path, requirements_dir)
 
     assert document.title == "Password Security Requirements"
+
 
 def test_rejects_path_outside_root(tmp_path: Path):
     requirements_dir = tmp_path / "requirements"
@@ -60,6 +62,8 @@ def test_rejects_unsupported_extension(tmp_path: Path):
 
     with pytest.raises(ValueError, match="No loader"):
         DocumentLoaderFactory().get_loader(document_path)
+
+
 def test_selects_pdf_loader(tmp_path: Path):
     document_path = tmp_path / "requirements.pdf"
 

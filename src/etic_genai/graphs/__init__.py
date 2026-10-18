@@ -1,5 +1,5 @@
 """Graph state schemas and reusable (sub)graphs."""
 
-from etic_genai.graphs.state import BaseAgentState
+from etic_genai.graphs.state import BaseAgentState, RAGState
 
-__all__ = ["BaseAgentState"]
+__all__ = ["BaseAgentState", "RAGState"]

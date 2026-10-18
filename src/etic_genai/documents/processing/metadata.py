@@ -1,6 +1,6 @@
 import hashlib
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -24,5 +24,5 @@ def calculate_content_hash(content: str) -> str:
 def get_modified_at(path: Path) -> datetime:
     return datetime.fromtimestamp(
         path.stat().st_mtime,
-        tz=timezone.utc,
+        tz=UTC,
     )

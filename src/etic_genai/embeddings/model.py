@@ -1,24 +1,18 @@
+"""Embedding model factory. Everything else depends on LangChain's `Embeddings` interface."""
+
 import os
-from collections.abc import Sequence
 
-from langchain_openai import OpenAIEmbeddings
+from langchain_core.embeddings import Embeddings
+
+from etic_genai.config import Settings, get_settings
 
 
-class EmbeddingModel:
-    def __init__(
-        self,
-        model: str = "text-embedding-3-small",
-        api_key: str | None = None,
-        base_url: str | None = None,
-    ) -> None:
-        self.model = OpenAIEmbeddings(
-            model=model,
-            api_key=api_key or os.getenv("OPENAI_API_KEY"),
-            base_url=base_url or os.getenv("OPENAI_BASE_URL"),
-        )
+def get_embeddings(settings: Settings | None = None) -> Embeddings:
+    from langchain_openai import OpenAIEmbeddings
 
-    def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
-        return self.model.embed_documents(list(texts))
-
-    def embed_query(self, text: str) -> list[float]:
-        return self.model.embed_query(text)
+    settings = settings or get_settings()
+    return OpenAIEmbeddings(
+        model=settings.embedding_model_name,
+        api_key=os.getenv("OPENAI_API_KEY"),
+        base_url=os.getenv("OPENAI_BASE_URL"),
+    )

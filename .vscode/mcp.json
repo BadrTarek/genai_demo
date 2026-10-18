@@ -4,7 +4,8 @@
       "type": "stdio",
       "command": "C:\\Users\\HP\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
       "args": ["run_script.py", "mcp"],
-      "cwd": "D:\\Project\\myWorkplace\\etic_genai_demo"
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env"
     }
   }
 }
