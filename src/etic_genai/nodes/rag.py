@@ -209,9 +209,10 @@ class FinalizeNode(BaseNode):
         if status == "ok":
             cited = [n for n in cited_indices(answer) if 1 <= n <= len(contexts)]
             if cited:
-                sources = "\n".join(f"[{n}] {describe_source(contexts[n - 1])}" for n in cited)
+                # A Markdown list, so chat UIs render one source per line.
+                sources = "\n".join(f"- [{n}] {describe_source(contexts[n - 1])}" for n in cited)
                 answer = f"{answer}\n\nSources:\n{sources}"
         elif status == "ungrounded":
             sources = "\n".join(f"- {describe_source(c)}" for c in contexts)
-            answer = f"{answer}\n{sources}"
+            answer = f"{answer}\n\n{sources}"
         return {"messages": [AIMessage(content=answer)]}

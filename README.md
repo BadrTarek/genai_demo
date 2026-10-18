@@ -76,6 +76,26 @@ python run_script.py eval                          # offline evaluation -> outpu
 python run_script.py mcp                           # MCP server over stdio
 ```
 
+### Streamlit front end
+
+```bash
+pip install -e ".[ui]"
+streamlit run app/streamlit_app.py               # http://localhost:8501
+```
+
+| Tab | What it shows |
+|-----|---------------|
+| **Chat** | Multi-turn chat. Each step streams live while the agent runs. Each answer has an *Inspect* panel: the agent graph with the executed path highlighted (a red node marks where a guardrail stopped it), per-step results and timings, the retrieved passages scored against the relevance threshold, guardrail events, and the online evaluation scores. |
+| **Knowledge base** | Index a folder (incremental / force / reset), see indexed documents, and a search playground showing exactly what MCP `search_documents` returns. |
+| **Evaluation** | Run the offline evaluation with a progress bar, KPI tiles, mean score and pass rate per metric, a per-case score table and a drill-down with the judges' reasoning. |
+| **Architecture** | The agent graph and the guardrail / evaluator catalogue. |
+
+The sidebar sliders (passages, relevance threshold, groundedness threshold, attempts, online
+evaluation) rebuild the agent on the fly, so you can watch their effect immediately.
+
+If tables fail with `pyarrow requires NumPy 2.0`, your environment pins NumPy 1.x
+(e.g. for scikit-learn/matplotlib): `pip install "pyarrow<21"`.
+
 ### Copilot (VS Code)
 
 [.vscode/mcp.json](.vscode/mcp.json) registers the server. Open Copilot Chat in **Agent** mode,
@@ -87,7 +107,7 @@ Restart the server from the MCP view after changing code or `.env`.
 ### Running MCP and the agent at the same time
 
 The local Qdrant store (`QDRANT_PATH`) can only be opened by one process. When Copilot's MCP
-server is running and you also want to use the CLI, run a Qdrant server:
+server is running and you also want to use the CLI or the Streamlit app, run a Qdrant server:
 
 ```bash
 docker compose up -d qdrant      # then QDRANT_URL=http://localhost:6333 in .env, and re-index
@@ -110,6 +130,7 @@ src/etic_genai/
 ├── memory/        Checkpointers (conversation persistence)
 ├── tools/         Tools: BaseAgentTool, ToolRegistry
 └── mcp_server.py  MCP server
+app/               Streamlit front end (streamlit_app.py) and chart/graph helpers (viz.py)
 evals/             Labelled evaluation dataset
 tests/             pytest (offline)
 ```

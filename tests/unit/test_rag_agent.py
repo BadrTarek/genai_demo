@@ -49,7 +49,7 @@ def test_grounded_answer_with_sources(indexed_kb, settings, fake_llm_factory, fa
 
     assert state["status"] == "ok"
     assert state["contexts"][0]["source"] == "authentication.md"
-    assert "Sources:\n[1] authentication.md > Passwords" in state["messages"][-1].content
+    assert "Sources:\n- [1] authentication.md > Passwords" in state["messages"][-1].content
     assert state["evaluations"]["groundedness"]["score"] == 0.9
     assert state["evaluations"]["answer_relevance"]["passed"]
 

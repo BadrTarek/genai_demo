@@ -24,6 +24,8 @@ dependencies = [
 [project.optional-dependencies]
 # Chat-model providers other than OpenAI, e.g. `pip install -e ".[anthropic]"`.
 openai = ["langchain-openai>=1.0"]
+# Streamlit front end (app/streamlit_app.py).
+ui = ["streamlit>=1.40", "altair>=5", "pandas>=2"]
 anthropic = ["langchain-anthropic>=1.0"]
 dev = [
     "pytest>=8.0",
