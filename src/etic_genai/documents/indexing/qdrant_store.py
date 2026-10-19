@@ -1,201 +1,296 @@
-"""Qdrant persistence for document chunks.
 
-Every point carries the indexed `root` and `document_id` in its payload, so a document
-can be replaced or removed as a unit and several roots can share one collection.
-"""
-
-import atexit
-from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
+from typing import Literal
 from uuid import NAMESPACE_URL, UUID, uuid5
 
+from fastembed import SparseEmbedding, SparseTextEmbedding
+from langsmith import traceable
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
-    FilterSelector,
-    MatchAny,
+    Fusion,
+    FusionQuery,
     MatchValue,
+    Modifier,
     PointStruct,
+    Prefetch,
+    SparseVector,
+    SparseVectorParams,
     VectorParams,
 )
 
-from etic_genai.core.exceptions import ConfigurationError
-from etic_genai.core.logging import get_logger
 from etic_genai.documents.models.DocumentChunk import DocumentChunk
 
-logger = get_logger(__name__)
+QdrantMode = Literal["local", "docker"]
 
 
 class QdrantStore:
+    vector_size = 1536
+    sparse_vector_name = "BM25"
+
     def __init__(
         self,
+        path: str = "./data/qdrant",
         collection_name: str = "business_requirements",
-        path: str | None = "./data/qdrant",
+        mode: QdrantMode = "local",
         url: str | None = None,
         api_key: str | None = None,
-        location: str | None = None,
     ) -> None:
-        """Connect to a Qdrant server (`url`), an in-process store (`location=":memory:"`)
-        or a local on-disk store (`path`). A local store can only be opened by one process
-        at a time; run a Qdrant server when the MCP server and the agent run together."""
-        if url:
-            self.client = QdrantClient(url=url, api_key=api_key)
-        elif location:
-            self.client = QdrantClient(location=location)
-        self.local_path = None if url or location else Path(path or "./data/qdrant")
-        if self.local_path is not None:
-            self.local_path.mkdir(parents=True, exist_ok=True)
-            self.client = QdrantClient(path=str(self.local_path))
-            # Release the file lock before interpreter teardown (avoids noisy __del__ errors).
-            atexit.register(self.client.close)
-        self.collection_name = collection_name
-
-    # -- collection -------------------------------------------------------------------
-
-    def exists(self) -> bool:
-        return self.client.collection_exists(self.collection_name)
-
-    def _ensure_collection(self, vector_size: int) -> None:
-        if not self.exists():
-            self.client.create_collection(
-                collection_name=self.collection_name,
-                vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
-            )
-            return
-        existing_size = self.client.get_collection(self.collection_name).config.params.vectors.size
-        if existing_size != vector_size:
-            fix = (
-                f"delete the folder {self.local_path} and re-index"
-                if self.local_path is not None
-                else "re-index with --reset"
-            )
-            raise ConfigurationError(
-                f"Collection '{self.collection_name}' stores {existing_size}-d vectors but the "
-                f"embedding model returns {vector_size}-d vectors: {fix}."
-            )
-
-    def reset(self) -> None:
-        """Remove every point. In local mode the collection is emptied rather than dropped:
-        on Windows the local client keeps the collection's SQLite file open, so a dropped
-        collection stays on disk and is reloaded, old points included, when re-created."""
-        if not self.exists():
-            return
-        if self.local_path is None:
-            self.client.delete_collection(self.collection_name)
-        else:
-            self.client.delete(
-                collection_name=self.collection_name,
-                points_selector=FilterSelector(filter=Filter()),
-            )
-
-    # -- writes -----------------------------------------------------------------------
-
-    def replace_document(
-        self, root: str, document_id: str, chunks: list[DocumentChunk], vectors: list[list[float]]
-    ) -> None:
-        """Atomically (from the caller's view) swap all chunks of one document."""
-        if len(chunks) != len(vectors):
-            raise ValueError("Each chunk must have exactly one vector")
-        if vectors:
-            self._ensure_collection(len(vectors[0]))
-        self.delete_documents(root, [document_id])
-        if not chunks:
-            return
-        points = [
-            PointStruct(
-                id=self._point_id(root, chunk.chunk_id),
-                vector=vector,
-                payload={
-                    "root": root,
-                    "chunk_id": chunk.chunk_id,
-                    "document_id": chunk.document_id,
-                    "document_title": chunk.document_title,
-                    "document_hash": chunk.document_hash,
-                    "file_type": chunk.file_type,
-                    "source": chunk.source,
-                    "section": chunk.section,
-                    "chunk_index": chunk.chunk_index,
-                    "content": chunk.content,
-                },
-            )
-            for chunk, vector in zip(chunks, vectors, strict=True)
-        ]
-        self.client.upsert(collection_name=self.collection_name, points=points)
-
-    def delete_documents(self, root: str, document_ids: Iterable[str]) -> None:
-        document_ids = list(document_ids)
-        if not document_ids or not self.exists():
-            return
-        self.client.delete(
-            collection_name=self.collection_name,
-            points_selector=FilterSelector(
-                filter=Filter(
-                    must=[
-                        FieldCondition(key="root", match=MatchValue(value=root)),
-                        FieldCondition(key="document_id", match=MatchAny(any=document_ids)),
-                    ]
+        if mode == "docker":
+            if not url:
+                raise ValueError(
+                    "QDRANT_URL must be set when QDRANT_MODE=docker."
                 )
+            self.client = QdrantClient(url=url, api_key=api_key)
+        elif mode == "local":
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            self.client = QdrantClient(path=path)
+        else:
+            raise ValueError(f"Unsupported Qdrant mode: {mode}")
+
+        self.mode = mode
+        self.collection_name = collection_name
+        self._sparse_encoder: SparseTextEmbedding | None = None
+
+        self._ensure_collection()
+
+    @classmethod
+    def from_settings(cls) -> "QdrantStore":
+        from etic_genai.config import get_settings
+
+        settings = get_settings()
+        return cls(
+            path=settings.qdrant_path or "./data/qdrant",
+            collection_name=(
+                settings.qdrant_collection_name or "business_requirements"
             ),
+            mode=settings.qdrant_mode,
+            url=settings.qdrant_url,
+            api_key=settings.qdrant_api_key,
         )
 
-    # -- reads ------------------------------------------------------------------------
-
-    def _scroll_payloads(self, scroll_filter: Filter | None = None) -> Iterable[dict[str, Any]]:
-        if not self.exists():
-            return
-        offset = None
-        while True:
-            points, offset = self.client.scroll(
-                collection_name=self.collection_name,
-                scroll_filter=scroll_filter,
-                limit=256,
-                offset=offset,
-                with_payload=["root", "document_id", "document_title", "document_hash", "source"],
-                with_vectors=False,
-            )
-            for point in points:
-                yield point.payload or {}
-            if offset is None:
-                break
-
-    def document_hashes(self, root: str) -> dict[str, str]:
-        """`{document_id: content_hash}` for every document indexed under `root`."""
-        root_filter = Filter(must=[FieldCondition(key="root", match=MatchValue(value=root))])
-        return {
-            payload["document_id"]: payload.get("document_hash", "")
-            for payload in self._scroll_payloads(root_filter)
+    def _ensure_collection(self) -> None:
+        collections = self.client.get_collections().collections
+        collection_names = {
+            collection.name for collection in collections
         }
 
-    def list_documents(self) -> list[dict[str, Any]]:
-        documents: dict[tuple[str, str], dict[str, Any]] = {}
-        for payload in self._scroll_payloads():
-            key = (payload.get("root", ""), payload.get("document_id", ""))
-            entry = documents.setdefault(
-                key,
-                {
-                    "root": key[0],
-                    "document_id": key[1],
-                    "title": payload.get("document_title"),
-                    "source": payload.get("source"),
-                    "chunks": 0,
-                },
-            )
-            entry["chunks"] += 1
-        return sorted(documents.values(), key=lambda doc: (doc["root"], doc["document_id"]))
+        if self.collection_name not in collection_names:
+            self._create_collection()
+            return
 
-    def search(self, query_vector: list[float], limit: int = 5) -> list:
-        if not self.exists():
-            return []
+        collection = self.client.get_collection(self.collection_name)
+        sparse_vectors = dict(collection.config.params.sparse_vectors or {})
+        if self.sparse_vector_name in sparse_vectors:
+            return
+
+        if self.mode == "local":
+            point_count = self.client.count(self.collection_name, exact=True).count
+            if point_count:
+                existing_names = ", ".join(sorted(sparse_vectors)) or "none"
+                raise RuntimeError(
+                    f"Local Qdrant collection {self.collection_name!r} does not have "
+                    f"the required sparse vector {self.sparse_vector_name!r} "
+                    f"(configured: {existing_names}). Delete the collection after "
+                    "removing its data, then restart and re-index your documents."
+                )
+            self.client.delete_collection(self.collection_name)
+            self._create_collection()
+            return
+
+        sparse_vectors[self.sparse_vector_name] = SparseVectorParams(
+            modifier=Modifier.IDF
+        )
+        self.client.update_collection(
+            collection_name=self.collection_name,
+            sparse_vectors_config=sparse_vectors,
+        )
+
+    def _create_collection(self) -> None:
+        self.client.create_collection(
+            collection_name=self.collection_name,
+            vectors_config=VectorParams(
+                size=self.vector_size,
+                distance=Distance.COSINE,
+            ),
+            sparse_vectors_config={
+                self.sparse_vector_name: SparseVectorParams(
+                    modifier=Modifier.IDF
+                )
+            },
+        )
+
+    def _get_sparse_encoder(self) -> SparseTextEmbedding:
+        if self._sparse_encoder is None:
+            self._sparse_encoder = SparseTextEmbedding(
+                model_name="Qdrant/bm25",
+                language="english",
+            )
+        return self._sparse_encoder
+
+    @classmethod
+    def _to_sparse_vector(
+        cls,
+        embedding: SparseEmbedding,
+    ) -> dict[str, SparseVector]:
+        indices = embedding.indices
+        values = embedding.values
+
+        if len(indices) != len(values):
+            raise ValueError(
+                "Sparse vector indices and values must have equal lengths."
+            )
+
+        if len(indices) == 0:
+            return {}
+
+        return {
+            cls.sparse_vector_name: SparseVector(
+                indices=[int(index) for index in indices],
+                values=[float(value) for value in values],
+            )
+        }
+
+    def upsert(
+        self,
+        chunks: list[DocumentChunk],
+        vectors: list[list[float]],
+        owner_id: str | None = None,
+        is_public: bool = False,
+    ) -> None:
+        if len(chunks) != len(vectors):
+            raise ValueError(
+                "Each chunk must have exactly one dense vector."
+            )
+
+        if not chunks:
+            return
+
+        sparse_vectors = list(
+            self._get_sparse_encoder().passage_embed(
+                [chunk.content for chunk in chunks]
+            )
+        )
+
+        if len(chunks) != len(sparse_vectors):
+            raise RuntimeError(
+                "Sparse encoder returned a different number of vectors "
+                "than input chunks."
+            )
+
+        points = []
+
+        for chunk, dense_vector, sparse_vector in zip(
+            chunks, vectors, sparse_vectors, strict=True
+        ):
+            point_vectors = {
+                "": dense_vector,
+                **self._to_sparse_vector(sparse_vector),
+            }
+
+            points.append(
+                PointStruct(
+                    id=self._point_id(
+                        f"{owner_id}:{chunk.chunk_id}"
+                        if owner_id
+                        else chunk.chunk_id
+                    ),
+                    vector=point_vectors,
+                    payload={
+                        "chunk_id": chunk.chunk_id,
+                        "document_id": chunk.document_id,
+                        "document_title": chunk.document_title,
+                        "source": chunk.source,
+                        "section": chunk.section,
+                        "chunk_index": chunk.chunk_index,
+                        "content": chunk.content,
+                        "owner_id": owner_id,
+                        "is_public": is_public,
+                    },
+                )
+            )
+
+        self.client.upsert(
+            collection_name=self.collection_name,
+            points=points,
+        )
+
+    @traceable(name="qdrant-hybrid-retrieval")
+    def search(
+        self,
+        query_vector: list[float],
+        query_text: str,
+        limit: int = 5,
+        owner_id: str | None = None,
+        public_only: bool = True,
+    ) -> list:
+        conditions = []
+
+        if owner_id is not None:
+            conditions.append(
+                FieldCondition(
+                    key="owner_id",
+                    match=MatchValue(value=owner_id),
+                )
+            )
+
+        if public_only:
+            conditions.append(
+                FieldCondition(
+                    key="is_public",
+                    match=MatchValue(value=True),
+                )
+            )
+
+        query_filter = (
+            Filter(should=conditions) if conditions else None
+        )
+
+        sparse_queries = list(
+            self._get_sparse_encoder().query_embed(query_text)
+        )
+
+        if len(sparse_queries) != 1:
+            raise RuntimeError(
+                "Expected exactly one sparse query vector."
+            )
+
+        sparse_query = self._to_sparse_vector(sparse_queries[0])
+        candidate_limit = max(limit * 4, 20)
+
+        if sparse_query:
+            return self.client.query_points(
+                collection_name=self.collection_name,
+                prefetch=[
+                    Prefetch(
+                        query=query_vector,
+                        limit=candidate_limit,
+                        filter=query_filter,
+                    ),
+                    Prefetch(
+                        query=sparse_query[self.sparse_vector_name],
+                        using=self.sparse_vector_name,
+                        limit=candidate_limit,
+                        filter=query_filter,
+                    ),
+                ],
+                query=FusionQuery(fusion=Fusion.RRF),
+                limit=limit,
+                with_payload=True,
+                query_filter=query_filter,
+            ).points
+
+        # Fall back to dense search if the query has no sparse terms.
         return self.client.query_points(
             collection_name=self.collection_name,
             query=query_vector,
             limit=limit,
             with_payload=True,
+            query_filter=query_filter,
         ).points
 
     @staticmethod
-    def _point_id(root: str, chunk_id: str) -> UUID:
-        return uuid5(NAMESPACE_URL, f"{root}|{chunk_id}")
+    def _point_id(chunk_id: str) -> UUID:
+        return uuid5(NAMESPACE_URL, chunk_id)

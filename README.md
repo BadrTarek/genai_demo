@@ -1,146 +1,200 @@
 # etic_genai_demo
 
-A Retrieval-Augmented Generation (RAG) system over business-requirement documents, built with
-[LangChain](https://python.langchain.com), [LangGraph](https://langchain-ai.github.io/langgraph/),
-Qdrant and MCP. The same knowledge base is used in two ways:
-
-1. **Through MCP** – GitHub Copilot (or any MCP client) indexes and searches the documents.
-2. **Through a guarded agent** – a LangGraph agent answers with citations, protected by input and
-   output guardrails and scored by evaluators online and offline.
-
-## Architecture
-
-```
-                    ┌────────────── Knowledge base (documents/) ──────────────┐
- folder ──► loaders ──► chunker ──► embeddings ──► Qdrant  (incremental: content hash per doc,
- md/txt/csv/pdf/docx   (heading-aware)              ▲        stale chunks removed)
-                    └───────────────────────────────┼─────────────────────────┘
-                                                    │ search
-              ┌─────────────────────────────────────┴──────────────────┐
-              │                                                        │
-   MCP server (mcp_server.py)                     RAG agent (agents/rag_agent.py)
-   index_documents / search_documents             input_guardrails ─► retrieve ─► generate
-   list_documents  / ask_knowledge_base ────────►       │                 │          │
-              ▲                                         ▼                 ▼          ▼
-     Copilot / any MCP client                       blocked          no context  output_guardrails
-                                                                                  │  ▲ retry
-                                                                                  ▼  │
-                                                                     evaluate ─► finalize (answer + sources)
-```
-
-**Guardrails** (`guardrails/`)
-
-| Stage  | Guardrail                  | Action                                                    |
-|--------|----------------------------|-----------------------------------------------------------|
-| input  | `InputLengthGuardrail`     | block empty / oversized questions                          |
-| input  | `PromptInjectionGuardrail` | block jailbreak / instruction-override attempts            |
-| input  | `PIIRedactionGuardrail`    | redact emails, phones, IBANs, cards before the LLM sees them |
-| retrieve | relevance threshold      | off-topic questions get "not in the knowledge base"        |
-| output | `PIIRedactionGuardrail`    | redact personal data in the answer                         |
-| output | `CitationGuardrail`        | answer must cite existing passages, e.g. `[1]`             |
-| output | `GroundednessGuardrail`    | LLM judge checks every claim is supported; regenerate once with feedback, then fall back to a safe answer |
-
-**Evaluators** (`evaluation/`)
-
-| Evaluator                    | Type          | Measures                                   | Used        |
-|------------------------------|---------------|--------------------------------------------|-------------|
-| `FaithfulnessEvaluator`      | LLM judge     | hallucination: is the answer supported?    | online (guardrail) + offline |
-| `AnswerRelevanceEvaluator`   | LLM judge     | does the answer address the question?      | online + offline |
-| `ContextRelevanceEvaluator`  | LLM judge     | did retrieval find the needed passages?    | offline     |
-| `AnswerCorrectnessEvaluator` | LLM judge     | agreement with a reference answer          | offline     |
-| `RetrievalRecallEvaluator`   | deterministic | expected source documents retrieved        | offline     |
-| `RetrievalMRREvaluator`      | deterministic | rank of the first expected source          | offline     |
-| `ExpectedStatusEvaluator`    | deterministic | answered / blocked / declined as expected  | offline     |
-
-The labelled dataset is [evals/rag_dataset.jsonl](evals/rag_dataset.jsonl); it includes
-adversarial cases (prompt injection, off-topic, PII) so guardrails are regression-tested too.
+AI agents built with [LangChain](https://python.langchain.com) and [LangGraph](https://langchain-ai.github.io/langgraph/).
 
 ## Setup
 
 ```bash
-python -m venv .venv && .venv\Scripts\activate     # source .venv/bin/activate on Linux/macOS
-pip install -e ".[dev]"
-cp .env.example .env                               # set OPENAI_API_KEY, OPENAI_BASE_URL, LLM_MODEL
-pytest                                             # offline: fake LLM, fake embeddings, in-memory Qdrant
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev,openai]"      # or .[anthropic], or your provider's package
+cp .env.example .env                # then set LLM_PROVIDER, LLM_MODEL and the API key
+pytest                              # tests use a fake LLM, no API key needed
+python scripts/run_agent.py         # chat with the example agent
+uvicorn etic_genai.api.main:app --reload  # start the HTTP API
 ```
 
-## Usage
+The API provides `POST /auth/register` and `POST /auth/sign-in`. Registration
+requires a unique email and a password of at least 12 characters with uppercase,
+lowercase, number, and special character. Sign-in returns a bearer token. Use
+the **Authorize** button in Swagger to provide it, then call the protected
+`POST /documents/upload` or `POST /chat` endpoints. Uploads are scoped to the
+signed-in user, and chat retrieves only that user's documents. Reuse the
+returned `conversation_id` to continue a saved conversation.
+Open `http://127.0.0.1:8000/docs` to try the endpoints interactively.
+Document uploads are private by default. Set the upload form field
+`visibility=public` to let other users retrieve that document only as a fallback
+when their own document search returns no chunks.
 
-```bash
-python run_script.py index --path requirements     # incremental; --force re-embeds, --reset empties first
-python run_script.py search --query "What are the password requirements?"
-python run_script.py docs                          # what is indexed
-python run_script.py ask --question "Who can approve an invoice worth 5,000 EUR?"
-python run_script.py chat                          # multi-turn chat with the guarded agent
-python run_script.py eval                          # offline evaluation -> output/eval_report.json
-python run_script.py mcp                           # MCP server over stdio
+SQLite stores account data, expiring sessions, and LangGraph checkpoints in
+`SQLITE_DB_PATH` (default `./data/documents.db`). Passwords are stored as
+scrypt hashes, not plaintext. Five failed sign-in attempts within 15 minutes
+lock the account for 30 minutes. Sessions expire after 30 minutes of inactivity.
+Use HTTPS in deployments beyond local development.
+The chat endpoint embeds each question and combines dense semantic search with
+BM25 sparse search using Qdrant's reciprocal rank fusion (RRF), returning up to
+five chunks from the same collection used by document upload. FastEmbed's
+`Qdrant/bm25` encodes BM25-normalized passage term weights and query terms;
+Qdrant applies corpus IDF through the sparse-vector index modifier. Its
+response includes the retrieved source metadata. New collections are created
+with dense and BM25 sparse vectors. Existing points created with the previous
+hashed-token sparse encoding must be cleared and re-uploaded or re-indexed
+because their token IDs are incompatible with BM25. An embedded collection with
+an incompatible schema (dense-only or a different sparse-vector name) is
+recreated automatically only when empty; if points remain, startup fails with
+instructions to clear the collection before re-indexing. Existing remote
+collections are updated with the sparse-vector configuration, but their points
+still need re-uploading or re-indexing to gain BM25 vectors.
+
+### LLM token usage
+
+Each chat request records model-reported input and output tokens cumulatively
+per `(user_id, conversation_id)` in the `conversation_usage` table in the same
+SQLite database. Usage from every completed model call in an agent run is
+counted. `unreported_calls` identifies model calls whose provider integration
+did not return token usage, so totals may be incomplete for those calls.
+Embedding usage is not included.
+
+The administrator-only `GET /admin/usage` endpoint lists totals for all users
+and conversations. Accounts are regular users by default. To promote a trusted
+account, stop the API and run this SQL against the configured SQLite database:
+
+```sql
+UPDATE users SET is_admin = 1 WHERE email = 'admin@example.com';
 ```
 
-### Streamlit front end
+Restart the API; the promotion applies to the account's next authorized
+request. The `is_admin` column is added automatically to existing databases;
+existing accounts remain non-admin.
 
-```bash
-pip install -e ".[ui]"
-streamlit run app/streamlit_app.py               # http://localhost:8501
+The administrator-only `POST /admin/evaluations/run` endpoint runs the
+`brd-retrieval-evaluation` LangSmith dataset using the signed-in administrator's
+own documents. It returns the experiment name, ID, and LangSmith URL. Configure
+`LANGSMITH_API_KEY` and ensure the dataset already exists before running an
+evaluation. Evaluations are synchronous and may take several minutes.
+Administrators can also run an evaluation from the **Evaluations** page in the
+frontend workspace.
+
+### Evaluate retrieval and answers
+
+Run `python tests/evaluate_agent.py` to evaluate the end-to-end chat retrieval
+and assistant response in LangSmith. Each experiment reports
+`retrieval_relevance` for the retrieved context and `answer_correctness` for
+the assistant response against the example's `expected_context` reference
+facts. Evaluation examples need `question`, `user_id`, and non-empty
+`expected_context` fields.
+
+### View indexed documents in the Qdrant dashboard
+
+The default setup uses embedded Qdrant storage and does not expose the Qdrant
+dashboard. To run Qdrant as a local server with persistent Docker storage, start
+Docker Desktop and run this PowerShell command:
+
+```powershell
+docker run -d --name qdrant -p 6333:6333 -p 6334:6334 -v qdrant_storage:/qdrant/storage qdrant/qdrant
 ```
 
-| Tab | What it shows |
-|-----|---------------|
-| **Chat** | Multi-turn chat. Each step streams live while the agent runs. Each answer has an *Inspect* panel: the agent graph with the executed path highlighted (a red node marks where a guardrail stopped it), per-step results and timings, the retrieved passages scored against the relevance threshold, guardrail events, and the online evaluation scores. |
-| **Knowledge base** | Index a folder (incremental / force / reset), see indexed documents, and a search playground showing exactly what MCP `search_documents` returns. |
-| **Evaluation** | Run the offline evaluation with a progress bar, KPI tiles, mean score and pass rate per metric, a per-case score table and a drill-down with the judges' reasoning. |
-| **Architecture** | The agent graph and the guardrail / evaluator catalogue. |
+Set the following in `.env` to connect the API and ingestion script to that
+server instead of the embedded database. `QDRANT_MODE` must be `docker` to
+select the server; `local` selects embedded storage:
 
-The sidebar sliders (passages, relevance threshold, groundedness threshold, attempts, online
-evaluation) rebuild the agent on the fly, so you can watch their effect immediately.
-
-If tables fail with `pyarrow requires NumPy 2.0`, your environment pins NumPy 1.x
-(e.g. for scikit-learn/matplotlib): `pip install "pyarrow<21"`.
-
-### Copilot (VS Code)
-
-[.vscode/mcp.json](.vscode/mcp.json) registers the server. Open Copilot Chat in **Agent** mode,
-enable the `etic-knowledge-base` tools and ask e.g. *"Using the knowledge base, which role can
-reopen an approved invoice?"*. Copilot calls `search_documents` and writes the answer itself, or
-`ask_knowledge_base` to get the guarded agent's cited answer with its guardrail/eval report.
-Restart the server from the MCP view after changing code or `.env`.
-
-### Running MCP and the agent at the same time
-
-The local Qdrant store (`QDRANT_PATH`) can only be opened by one process. When Copilot's MCP
-server is running and you also want to use the CLI or the Streamlit app, run a Qdrant server:
-
-```bash
-docker compose up -d qdrant      # then QDRANT_URL=http://localhost:6333 in .env, and re-index
+```dotenv
+QDRANT_MODE=docker
+QDRANT_URL=http://localhost:6333
+QDRANT_COLLECTION_NAME=business_requirements
 ```
+
+Open `http://localhost:6333/dashboard` to view collections and points. The
+embedded database under `data/qdrant` is separate from the server's Docker
+volume; upload the documents again through `/docs` or run `python run_script.py`
+to populate the server collection. Stop the Docker container with
+`docker stop qdrant`; start it again with `docker start qdrant`.
+
+To switch back to embedded local storage, set `QDRANT_MODE=local`. The setting
+is shared by the CLI script and API. Restart the API after changing `.env`.
+
+### MCP server for Copilot and the guarded RAG agent
+
+`python -m etic_genai.mcp_server` serves the knowledge base over MCP (stdio);
+[.vscode/mcp.json](.vscode/mcp.json) registers it for GitHub Copilot. In Copilot
+Chat (Agent mode) enable the `etic-knowledge-base` tools:
+
+| Tool | What it does |
+|------|--------------|
+| `index_documents` | Indexes a folder (default `REQUIREMENTS_DIR`, must be under `KNOWLEDGE_BASE_ROOT`) with the same hybrid pipeline as the API. Re-indexing a file replaces its old chunks. |
+| `search_documents` | Hybrid dense + BM25 search (RRF). Each hit has the fused `score` and a dense cosine `relevance`. |
+| `list_documents` | Documents in the shared knowledge base. |
+| `ask_knowledge_base` | Answer from the guarded RAG agent (`agents/rag_agent.py`). |
+
+Documents indexed through MCP are stored as **public** (`owner_id=None`,
+`is_public=True`), so they also act as the public fallback context for API users.
+The first search indexes `REQUIREMENTS_DIR` automatically when
+`INDEXING_ON_STARTUP=true`.
+
+The guarded agent runs: input guardrails (length, prompt injection, PII
+redaction) → hybrid retrieval with a relevance threshold → answer with `[n]`
+citations → output guardrails (PII, citations, LLM groundedness judge). A failed
+output check triggers one regeneration with feedback, then a safe fallback. Tune it
+with `MIN_RELEVANCE_SCORE`, `GROUNDEDNESS_THRESHOLD`, `MAX_GENERATION_ATTEMPTS` and
+`MAX_QUESTION_CHARS`.
+
+Embedded Qdrant can only be opened by one process: stop the API (or use
+`QDRANT_MODE=docker`) while the MCP server is running.
 
 ## Project layout
 
 ```
 src/etic_genai/
 ├── config/        Settings loaded from env / .env (pydantic-settings)
-├── core/          LLM factory (get_llm), logging (stderr), exceptions
-├── documents/     loaders/ (md, txt, csv, pdf, docx), processing/ (chunker), indexing/ (KnowledgeBase, QdrantStore)
-├── embeddings/    Embedding model factory
-├── guardrails/    Input/output guardrails and the GuardrailPipeline
-├── evaluation/    Evaluators (LLM judges + deterministic) and the dataset runner
-├── agents/        BaseAgent, AssistantAgent (tool-calling example), RAGAgent
-├── nodes/         Graph nodes: LLMNode, rag.py (RAG agent nodes)
-├── graphs/        State schemas (BaseAgentState, RAGState)
-├── prompts/       Prompt classes; text in templates/*.md (answer + judge prompts)
+├── core/          LLM factory (get_llm), logging, exceptions
+├── agents/        Agents: BaseAgent + concrete agents (one file per agent)
+├── graphs/        Graph state schemas (BaseAgentState) and shared subgraphs
+├── nodes/         Reusable graph nodes: BaseNode, LLMNode
+├── tools/         Tools: BaseAgentTool, ToolRegistry; common/ for shared tools
+├── prompts/       Prompt classes (BasePrompt); prompt text in templates/*.md
 ├── memory/        Checkpointers (conversation persistence)
-├── tools/         Tools: BaseAgentTool, ToolRegistry
-└── mcp_server.py  MCP server
-app/               Streamlit front end (streamlit_app.py) and chart/graph helpers (viz.py)
-evals/             Labelled evaluation dataset
-tests/             pytest (offline)
+├── api/           FastAPI app, schemas, dependencies, routes, and chat service
+├── usage/         Model-token callback collection and SQLite conversation totals
+├── guardrails/    Input/output guardrails for the RAG agent
+├── mcp_server.py  MCP server (Copilot) over the shared knowledge base
+├── retrievers/    RAG: loaders, splitters, vector stores, retrievers
+└── utils/         Small shared helpers
+tests/             pytest; conftest.py provides a fake LLM
+scripts/           Runnable entry points
+notebooks/         Experiments (don't import notebooks from src)
 ```
+
+## How to add things
+
+**A tool:** subclass `BaseAgentTool` in `tools/` (or `tools/<domain>/`), define an
+`args_schema` pydantic model, implement `_execute`. Register it in
+`tools/__init__.py` if other agents should be able to look it up by name.
+See `tools/common/datetime_tool.py`.
+
+**A prompt:** add `prompts/templates/<name>.md` and a `BasePrompt` subclass with
+`template_name = "<name>"`. Keep prompt text out of Python code.
+
+**A node:** subclass `BaseNode`, set `name`, implement
+`run(state, config) -> dict` that returns only the state keys it changes.
+
+**An agent:** subclass `BaseAgent`, set `name`, and implement `build_graph()`
+returning an uncompiled `StateGraph(self.state_schema)`. Override
+`default_tools()` and `state_schema` as needed. See `agents/assistant_agent.py`.
+
+```python
+from etic_genai.agents import AssistantAgent
+from etic_genai.memory import get_checkpointer
+
+agent = AssistantAgent(checkpointer=get_checkpointer())
+agent.invoke("What time is it in Cairo?", thread_id="demo")
+```
+
+Use `get_sqlite_checkpointer` in services that need conversations to survive
+process restarts; the API uses it automatically with `SQLITE_DB_PATH`.
 
 ## Conventions
 
 - Never construct chat models directly; use `core.llm.get_llm()` so the provider stays configurable.
-- Read configuration through `config.get_settings()`, not `os.getenv`.
-- Every module logs through `core.logging.get_logger(__name__)`. Never `print` in library code:
-  stdout is the MCP protocol channel.
-- Prompt text (including judge prompts) lives in `prompts/templates/*.md`.
-- Add a test with the fake LLM (`fake_llm_factory` / `fake_judge_factory`) for every agent.
+- Every module logs through `core.logging.get_logger(__name__)`.
+- Raise errors from `core.exceptions`.
+- Add a test with the fake LLM (`fake_llm_factory` fixture) for every agent.
 - Lint and format with `ruff check . && ruff format .`.

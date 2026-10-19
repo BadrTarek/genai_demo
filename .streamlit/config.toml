@@ -1,7 +1,0 @@
-[theme]
-# Blue (validated data-viz palette) instead of Streamlit's default red, so score bars
-# and controls don't read as errors.
-primaryColor = "#2a78d6"
-
-[browser]
-gatherUsageStats = false

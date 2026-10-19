@@ -6,8 +6,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
-from etic_genai.documents.indexing.knowledge_base import KnowledgeBase
-from etic_genai.evaluation.base import EvalSample, Evaluator
+from etic_genai.documents.indexing.knowledge_base import SharedKnowledgeBase
 from etic_genai.guardrails import (
     NOT_FOUND_ANSWER,
     GuardrailContext,
@@ -77,7 +76,7 @@ class RetrieveNode(BaseNode):
     name = "retrieve"
 
     def __init__(
-        self, knowledge_base: KnowledgeBase, top_k: int = 5, min_score: float = 0.3
+        self, knowledge_base: SharedKnowledgeBase, top_k: int = 5, min_score: float = 0.3
     ) -> None:
         super().__init__()
         self.knowledge_base = knowledge_base
@@ -91,7 +90,9 @@ class RetrieveNode(BaseNode):
             self.logger.exception("Retrieval failed")
             return {"status": "error", "answer": ERROR_ANSWER}
         # Relevance threshold doubles as a scope guardrail: off-topic questions find nothing.
-        relevant = [hit for hit in hits if hit["score"] >= self.min_score]
+        # Hybrid search ranks by RRF, whose scores aren't comparable across queries, so
+        # the threshold applies to each passage's dense cosine `relevance`.
+        relevant = [hit for hit in hits if hit["relevance"] >= self.min_score]
         self.logger.debug(
             "Retrieved %d/%d passages above %.2f", len(relevant), len(hits), self.min_score
         )
@@ -174,27 +175,6 @@ class OutputGuardrailsNode(BaseNode):
             self.logger.warning("Answer rejected by %s, giving up", result.failure.name)
             update.update(status="ungrounded", answer=UNGROUNDED_ANSWER)
         return update
-
-
-class EvaluateNode(BaseNode):
-    """Online evaluation: scores every answered turn so quality can be monitored."""
-
-    name = "evaluate"
-
-    def __init__(self, evaluators: list[Evaluator]) -> None:
-        super().__init__()
-        self.evaluators = evaluators
-
-    def run(self, state: Any, config: RunnableConfig) -> dict[str, Any]:
-        sample = EvalSample(
-            question=state["question"],
-            answer=state["answer"],
-            contexts=[c.get("content", "") for c in state["contexts"]],
-        )
-        evaluations = dict(state.get("evaluations", {}))
-        for evaluator in self.evaluators:
-            evaluations[evaluator.name] = evaluator.evaluate(sample).to_dict()
-        return {"evaluations": evaluations}
 
 
 class FinalizeNode(BaseNode):

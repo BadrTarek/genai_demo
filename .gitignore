@@ -217,5 +217,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Local runtime data (vector index, SQLite DB, chunk dumps) - never versioned
 data/
 output/

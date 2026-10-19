@@ -1,6 +1,5 @@
 import pytest
 
-from etic_genai.evaluation import FaithfulnessEvaluator
 from etic_genai.guardrails import (
     NOT_FOUND_ANSWER,
     CitationGuardrail,
@@ -78,8 +77,21 @@ def test_citations_must_exist():
 def test_groundedness_uses_judge_score(fake_judge_factory):
     context = GuardrailContext(question="q", contexts=["passage"])
 
-    low = GroundednessGuardrail(FaithfulnessEvaluator(fake_judge_factory(0.2)), threshold=0.7)
-    high = GroundednessGuardrail(FaithfulnessEvaluator(fake_judge_factory(0.9)), threshold=0.7)
+    low = GroundednessGuardrail(fake_judge_factory(0.2), threshold=0.7)
+    high = GroundednessGuardrail(fake_judge_factory(0.9), threshold=0.7)
 
     assert not low.check("answer [1]", context).passed
     assert high.check("answer [1]", context).metadata["score"] == 0.9
+
+
+def test_groundedness_fails_closed_when_judge_errors(fake_llm_factory):
+    class BrokenJudge:
+        def invoke(self, _messages):
+            raise RuntimeError("judge down")
+
+    guardrail = GroundednessGuardrail(fake_llm_factory(), threshold=0.7)
+    guardrail.judge = BrokenJudge()
+
+    result = guardrail.check("answer [1]", GuardrailContext(question="q", contexts=["p"]))
+
+    assert not result.passed and "could not run" in result.reason

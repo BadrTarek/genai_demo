@@ -3,7 +3,7 @@
     "etic-knowledge-base": {
       "type": "stdio",
       "command": "C:\\Users\\HP\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
-      "args": ["run_script.py", "mcp"],
+      "args": ["-m", "etic_genai.mcp_server"],
       "cwd": "${workspaceFolder}",
       "envFile": "${workspaceFolder}/.env"
     }

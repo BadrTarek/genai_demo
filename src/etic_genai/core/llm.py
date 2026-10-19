@@ -21,8 +21,7 @@ def get_llm(
     if not model:
         raise ConfigurationError("No LLM model configured. Set LLM_MODEL in .env.")
 
-    if settings.llm_temperature is not None:
-        kwargs.setdefault("temperature", settings.llm_temperature)
+    kwargs.setdefault("temperature", settings.llm_temperature)
     if settings.llm_max_tokens is not None:
         kwargs.setdefault("max_tokens", settings.llm_max_tokens)
     return init_chat_model(model, model_provider=provider, **kwargs)

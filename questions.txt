@@ -1,6 +1,0 @@
-What are the password requirements?
-How many failed login attempts lock an account?
-Who can approve an invoice worth 5,000 EUR?
-Can the invoice creator approve their own invoice?
-What information is required to create a customer?
-Which role can reopen an approved invoice?

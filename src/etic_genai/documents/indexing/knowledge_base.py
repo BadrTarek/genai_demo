@@ -1,66 +1,84 @@
-"""Document ingestion and vector search service shared by the CLI, MCP server and agent."""
+"""Shared (public) knowledge base on top of the hybrid `QdrantStore`.
 
-import json
+Used by the MCP server and the guarded RAG agent. Documents indexed here are stored
+as public (`owner_id=None`, `is_public=True`), so they are also the public fallback
+context for users of the web API.
+"""
+
+import math
 from pathlib import Path
 from typing import Any
 
-from langchain_core.embeddings import Embeddings
+from qdrant_client.models import (
+    FieldCondition,
+    Filter,
+    FilterSelector,
+    IsNullCondition,
+    MatchValue,
+    PayloadField,
+)
 
-from etic_genai.config import Settings, get_settings
 from etic_genai.core.logging import get_logger
 from etic_genai.documents.indexing.qdrant_store import QdrantStore
 from etic_genai.documents.loaders.factory import DocumentLoaderFactory
 from etic_genai.documents.processing.chunker import DocumentChunker
+from etic_genai.embeddings.model import EmbeddingModel
 
 logger = get_logger(__name__)
 
-# Directories that never contain knowledge-base documents.
-IGNORED_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache"}
+IGNORED_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__"}
 
 
-class KnowledgeBase:
-    """Index a directory into the vector store and search it.
+def _shared_document_filter(document_id: str | None = None) -> Filter:
+    must: list[Any] = [
+        FieldCondition(key="is_public", match=MatchValue(value=True)),
+        IsNullCondition(is_null=PayloadField(key="owner_id")),
+    ]
+    if document_id is not None:
+        must.append(FieldCondition(key="document_id", match=MatchValue(value=document_id)))
+    return Filter(must=must)
 
-    Indexing is incremental: a document is re-embedded only when its content hash
-    changes, and documents deleted from disk are removed from the store.
-    """
 
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
+    norm = math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b))
+    return dot / norm if norm else 0.0
+
+
+class SharedKnowledgeBase:
     def __init__(
         self,
-        store: QdrantStore,
-        embeddings: Embeddings,
-        chunker: DocumentChunker | None = None,
+        embedding_model: EmbeddingModel,
+        qdrant_store: QdrantStore,
         loader_factory: DocumentLoaderFactory | None = None,
+        chunker: DocumentChunker | None = None,
         allowed_root: str | None = None,
         max_files: int = 1000,
-        max_file_size_mb: float = 20.0,
     ) -> None:
-        self.store = store
-        self.embeddings = embeddings
-        self.chunker = chunker or DocumentChunker()
+        self.embedding_model = embedding_model
+        self.store = qdrant_store
         self.loader_factory = loader_factory or DocumentLoaderFactory()
+        self.chunker = chunker or DocumentChunker()
         self.allowed_root = Path(allowed_root).expanduser().resolve() if allowed_root else None
         self.max_files = max_files
-        self.max_file_size_bytes = int(max_file_size_mb * 1024 * 1024)
 
     @classmethod
-    def from_settings(cls, settings: Settings | None = None) -> "KnowledgeBase":
-        from etic_genai.embeddings import get_embeddings
+    def from_settings(cls) -> "SharedKnowledgeBase":
+        # Reuse the API's service factory so both use the same embeddings and store.
+        from etic_genai.api.dependencies import get_ingestion_services
+        from etic_genai.config import get_settings
 
-        settings = settings or get_settings()
+        settings = get_settings()
+        services = get_ingestion_services()
         return cls(
-            store=QdrantStore(
-                collection_name=settings.qdrant_collection_name,
-                path=settings.qdrant_path,
-                url=settings.qdrant_url,
-                api_key=settings.qdrant_api_key,
-            ),
-            embeddings=get_embeddings(settings),
-            chunker=DocumentChunker(settings.chunk_size, settings.chunk_overlap),
-            allowed_root=settings.knowledge_base_root or settings.knowledge_base_path,
-            max_files=settings.max_files_per_index,
-            max_file_size_mb=settings.max_file_size_mb,
+            embedding_model=services.embedding_model,
+            qdrant_store=services.qdrant_store,
+            loader_factory=services.loader_factory,
+            chunker=services.chunker,
+            allowed_root=settings.knowledge_base_root or settings.requirements_dir,
         )
+
+    # -- indexing -----------------------------------------------------------------------
 
     def _validate_path(self, path: str) -> Path:
         resolved = Path(path).expanduser().resolve()
@@ -72,95 +90,120 @@ class KnowledgeBase:
             )
         return resolved
 
-    def _candidate_files(self, root: Path) -> list[Path]:
+    def index_directory(self, path: str) -> dict[str, Any]:
+        """Index every supported file under `path` as shared documents.
+
+        Re-indexing a document replaces all of its previous chunks, so edited files
+        leave no stale chunks behind. One unreadable file does not stop the run.
+        """
+        root = self._validate_path(path)
         files = [
-            path
-            for path in sorted(root.rglob("*"))
-            if path.is_file()
-            and not IGNORED_DIRS.intersection(path.relative_to(root).parts)
-            and self.loader_factory.supports(path)
+            p
+            for p in sorted(root.rglob("*"))
+            if p.is_file() and not IGNORED_DIRS.intersection(p.relative_to(root).parts)
         ]
         if len(files) > self.max_files:
-            raise ValueError(
-                f"{root} contains {len(files)} supported files (limit {self.max_files}). "
-                "Point the knowledge base at a narrower directory."
-            )
-        return files
+            raise ValueError(f"{root} contains {len(files)} files (limit {self.max_files}).")
 
-    def index_path(
-        self, path: str, output_path: str | None = None, force: bool = False
-    ) -> dict[str, Any]:
-        root = self._validate_path(path)
-        root_key = root.as_posix()
-        existing = self.store.document_hashes(root_key)
-        seen: set[str] = set()
-        indexed: dict[str, list[dict[str, Any]]] = {}
-        unchanged: list[str] = []
+        indexed: dict[str, int] = {}
+        skipped: list[str] = []
         failed: list[dict[str, str]] = []
-
-        for file_path in self._candidate_files(root):
+        for file_path in files:
             document_id = file_path.relative_to(root).as_posix()
-            # Mark as seen before loading so a temporarily unreadable file keeps its old chunks.
-            seen.add(document_id)
             try:
-                if file_path.stat().st_size > self.max_file_size_bytes:
-                    raise ValueError("file exceeds the size limit")
-                document = self.loader_factory.get_loader(file_path).load(file_path, root)
-                if not force and existing.get(document_id) == document.content_hash:
-                    unchanged.append(document_id)
-                    continue
+                loader = self.loader_factory.get_loader(file_path)
+            except ValueError:
+                skipped.append(document_id)
+                continue
+            try:
+                document = loader.load(file_path, root)
                 chunks = self.chunker.split(document)
-                vectors = (
-                    self.embeddings.embed_documents([chunk.embedding_text for chunk in chunks])
-                    if chunks
-                    else []
+                vectors = self.embedding_model.embed_documents([c.content for c in chunks])
+                self.store.client.delete(
+                    collection_name=self.store.collection_name,
+                    points_selector=FilterSelector(filter=_shared_document_filter(document_id)),
                 )
-                self.store.replace_document(root_key, document_id, chunks, vectors)
+                self.store.upsert(chunks, vectors, owner_id=None, is_public=True)
             except Exception as exc:
                 logger.warning("Failed to index %s: %s", file_path, exc)
                 failed.append({"document_id": document_id, "error": str(exc)})
                 continue
+            indexed[document_id] = len(chunks)
 
-            indexed[document_id] = [
-                {
-                    "chunk_id": chunk.chunk_id,
-                    "document_title": chunk.document_title,
-                    "section": chunk.section,
-                    "content": chunk.content,
-                }
-                for chunk in chunks
-            ]
-
-        removed = sorted(set(existing) - seen)
-        self.store.delete_documents(root_key, removed)
-
-        if output_path and indexed:
-            output = Path(output_path)
-            output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text(json.dumps(indexed, indent=2, ensure_ascii=False), encoding="utf-8")
-
-        report = {
-            "path": root_key,
+        return {
+            "path": root.as_posix(),
             "documents_indexed": len(indexed),
-            "chunks_indexed": sum(len(chunks) for chunks in indexed.values()),
-            "documents_unchanged": len(unchanged),
-            "documents_removed": removed,
+            "chunks_indexed": sum(indexed.values()),
+            "skipped": skipped,
             "failed": failed,
         }
-        logger.info("Indexed %s: %s", root_key, {k: v for k, v in report.items() if k != "path"})
-        return report
+
+    # -- reads --------------------------------------------------------------------------
 
     def search(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
+        """Hybrid (dense + BM25, RRF-fused) search over shared documents.
+
+        Each hit has the fused rank `score` and a `relevance`: the dense cosine similarity
+        between the query and the passage. RRF scores only rank results, so `relevance`
+        is what callers should threshold on.
+        """
         if not query.strip():
             raise ValueError("Query must not be empty")
-        query_vector = self.embeddings.embed_query(query)
+        query_vector = self.embedding_model.embed_query(query)
+        points = self.store.search(
+            query_vector, query_text=query, limit=max(1, min(top_k, 50)), public_only=True
+        )
+        if not points:
+            return []
+        # Requesting only the unnamed dense vector returns it as a plain list; with
+        # several vectors it is the "" entry of a dict.
+        dense = {
+            record.id: (
+                record.vector.get("", []) if isinstance(record.vector, dict) else record.vector
+            )
+            or []
+            for record in self.store.client.retrieve(
+                collection_name=self.store.collection_name,
+                ids=[point.id for point in points],
+                with_vectors=[""],
+            )
+        }
         return [
-            {"score": round(point.score, 4), **(point.payload or {})}
-            for point in self.store.search(query_vector, limit=max(1, min(top_k, 50)))
+            {
+                "score": round(float(point.score), 4),
+                "relevance": round(_cosine(query_vector, dense.get(point.id, [])), 4),
+                **{
+                    key: (point.payload or {}).get(key)
+                    for key in ("document_id", "document_title", "source", "section", "content")
+                },
+            }
+            for point in points
         ]
 
     def list_documents(self) -> list[dict[str, Any]]:
-        return self.store.list_documents()
-
-    def reset(self) -> None:
-        self.store.reset()
+        documents: dict[str, dict[str, Any]] = {}
+        offset = None
+        while True:
+            points, offset = self.store.client.scroll(
+                collection_name=self.store.collection_name,
+                scroll_filter=_shared_document_filter(),
+                limit=256,
+                offset=offset,
+                with_payload=["document_id", "document_title", "source"],
+                with_vectors=False,
+            )
+            for point in points:
+                payload = point.payload or {}
+                entry = documents.setdefault(
+                    payload.get("document_id", ""),
+                    {
+                        "document_id": payload.get("document_id"),
+                        "title": payload.get("document_title"),
+                        "source": payload.get("source"),
+                        "chunks": 0,
+                    },
+                )
+                entry["chunks"] += 1
+            if offset is None:
+                break
+        return sorted(documents.values(), key=lambda doc: doc["document_id"] or "")
